@@ -1,4 +1,5 @@
 import csv
+import hashlib
 import os
 import re
 import shutil
@@ -18,8 +19,11 @@ NPS_PSV_TSV = "https://nopaystation.com/tsv/PSV_GAMES.tsv"
 GAME_IDS_CACHE = BASE / "psv_game_ids.txt"
 BUNDLED_TSV = Path(__file__).parent / "data" / "psv_games.tsv"
 GAME_ID_RE = re.compile(r"^[A-Z]{4}\d{5}$")
+QUIET_THRESHOLD = 3        # consecutive waiting cycles before quiet mode
+QUIET_LOG_INTERVAL = 3600  # seconds between log lines when in quiet mode
 
 _game_ids: set = set()
+_last_skipped: dict = {}  # device_name -> set of last-printed skipped dirs
 
 
 def _parse_game_ids_tsv(content: str) -> set:
@@ -85,12 +89,13 @@ def ping(ip):
     return result.returncode == 0
 
 
-def port_open(ip):
+def port_open(ip, verbose=True):
     try:
         with socket.create_connection((ip, CONFIG["port"]), timeout=2):
             return True
     except OSError as e:
-        print(f"    ftp {ip}:{CONFIG['port']} error: {e}", flush=True)
+        if verbose:
+            print(f"    ftp {ip}:{CONFIG['port']} error: {e}", flush=True)
         return False
 
 
@@ -103,14 +108,28 @@ def latest_mtime(path):
     return max(mtimes) if mtimes else 0
 
 
+def hash_save_tree(path: Path) -> str:
+    h = hashlib.sha1()
+    for fpath in sorted(path.rglob("*")):
+        if fpath.is_file():
+            h.update(fpath.relative_to(path).as_posix().encode())
+            h.update(fpath.read_bytes())
+    return h.hexdigest()
+
+
 def disk_usage_mb():
     total, used, _ = shutil.disk_usage(BASE)
     return used // (1024 ** 2), total // (1024 ** 2)
 
 
-def due_for_backup(name):
+def due_for_backup(name: str, current_hash: str) -> bool:
     last = state["last_backup"].get(name)
-    return not last or datetime.now() - last > timedelta(hours=CONFIG["backup_hours"])
+    last_hash = state["last_backup_hash"].get(name)
+    if not last or not last_hash:
+        return True
+    if current_hash != last_hash:
+        return True
+    return datetime.now() - last > timedelta(hours=CONFIG["backup_hours"])
 
 
 def send_sms(msg):
@@ -141,8 +160,10 @@ def backup_device(name, ip):
         ftp_download_dir(ftp, dest / entry)
         ftp.cwd("..")
 
-    if skipped:
-        print(f"  Skipped non-game dirs: {', '.join(skipped)}", flush=True)
+    skipped_set = set(skipped)
+    if skipped_set and skipped_set != _last_skipped.get(name):
+        print(f"  Skipped non-game dirs: {', '.join(sorted(skipped_set))}", flush=True)
+        _last_skipped[name] = skipped_set
 
     for item in dest.iterdir():
         if item.is_dir() and not is_game_id(item.name, game_ids):
@@ -150,10 +171,14 @@ def backup_device(name, ip):
 
     ftp.quit()
 
-    if due_for_backup(name):
+    current_hash = hash_save_tree(dest)
+    if due_for_backup(name, current_hash):
         ts = datetime.now().strftime("%Y-%m-%d_%H")
         shutil.copytree(dest, BACKUPS / f"{name}_{ts}", dirs_exist_ok=True)
         state["last_backup"][name] = datetime.now()
+        state["last_backup_hash"][name] = current_hash
+    else:
+        print(f"  Skipping backup for {name}: saves unchanged.", flush=True)
 
 
 def compare_saves():
@@ -194,16 +219,26 @@ def run_sync():
 
 
 def sync_loop(dry_run=False):
+    waiting_streak = 0
+    last_quiet_log = 0.0
+    quiet = False
+
     while True:
         try:
             ready = []
             for name, ip in CONFIG["devices"].items():
-                p, o = ping(ip), port_open(ip)
-                print(f"  {name} ({ip}): ping={'ok' if p else 'fail'}, ftp={'ok' if o else 'fail'}", flush=True)
+                p, o = ping(ip), port_open(ip, verbose=not quiet)
+                if not quiet:
+                    print(f"  {name} ({ip}): ping={'ok' if p else 'fail'}, ftp={'ok' if o else 'fail'}",
+                          flush=True)
                 if p and o:
                     ready.append(name)
 
             if len(ready) >= 2:
+                if quiet:
+                    print("Devices online, resuming normal logging.", flush=True)
+                quiet = False
+                waiting_streak = 0
                 state["status"] = "Devices ready"
 
                 for name in ready:
@@ -232,8 +267,22 @@ def sync_loop(dry_run=False):
                         send_sms(f"{summary}\nReply Y to sync\nMode: {CONFIG['mode']}")
                         state["notified"] = True
             else:
+                waiting_streak += 1
                 state["status"] = "Waiting for devices"
-                print(f"Waiting ({len(ready)}/{len(CONFIG['devices'])} devices ready)", flush=True)
+
+                if waiting_streak == QUIET_THRESHOLD:
+                    quiet = True
+                    last_quiet_log = time.monotonic()
+                    print(
+                        "Continuing polling, but will only report on 1hr schedule "
+                        "to reduce log spam...",
+                        flush=True,
+                    )
+                elif not quiet:
+                    print(f"Waiting ({len(ready)}/{len(CONFIG['devices'])} devices ready)", flush=True)
+                elif time.monotonic() - last_quiet_log >= QUIET_LOG_INTERVAL:
+                    print(f"Still waiting ({len(ready)}/{len(CONFIG['devices'])} devices ready)", flush=True)
+                    last_quiet_log = time.monotonic()
 
         except Exception as e:
             print(f"sync_loop error: {e}", flush=True)

@@ -33,6 +33,7 @@ CONFIG = load_config()
 
 state = {
     "last_backup": {},
+    "last_backup_hash": {},
     "pending": [],
     "notified": False,
     "status": "Idle",

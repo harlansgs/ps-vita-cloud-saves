@@ -1,5 +1,6 @@
 import os
 import time
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -159,6 +160,98 @@ def test_compare_saves_game_only_on_one_device(tmp_path, monkeypatch):
     assert actions[0][0] == "PCSG00205"
     assert actions[0][1] == "dev_a"
 
+
+# --- hash_save_tree ---
+
+def test_hash_save_tree_empty_dir(tmp_path):
+    result = sync.hash_save_tree(tmp_path)
+    assert isinstance(result, str) and len(result) == 40
+
+
+def test_hash_save_tree_stable(tmp_path):
+    (tmp_path / "PCSG00205").mkdir()
+    (tmp_path / "PCSG00205" / "save.bin").write_bytes(b"data")
+    assert sync.hash_save_tree(tmp_path) == sync.hash_save_tree(tmp_path)
+
+
+def test_hash_save_tree_same_content_same_hash(tmp_path):
+    d1, d2 = tmp_path / "d1", tmp_path / "d2"
+    for d in (d1, d2):
+        (d / "PCSG00205").mkdir(parents=True)
+        (d / "PCSG00205" / "save.bin").write_bytes(b"savedata")
+    assert sync.hash_save_tree(d1) == sync.hash_save_tree(d2)
+
+
+def test_hash_save_tree_content_change(tmp_path):
+    (tmp_path / "save.bin").write_bytes(b"v1")
+    h1 = sync.hash_save_tree(tmp_path)
+    (tmp_path / "save.bin").write_bytes(b"v2")
+    assert sync.hash_save_tree(tmp_path) != h1
+
+
+def test_hash_save_tree_rename_changes_hash(tmp_path):
+    (tmp_path / "a.bin").write_bytes(b"data")
+    h1 = sync.hash_save_tree(tmp_path)
+    (tmp_path / "a.bin").rename(tmp_path / "b.bin")
+    assert sync.hash_save_tree(tmp_path) != h1
+
+
+def test_hash_save_tree_order_independent(tmp_path):
+    d1, d2 = tmp_path / "d1", tmp_path / "d2"
+    d1.mkdir()
+    d2.mkdir()
+    for name, content in [("a.bin", b"aaa"), ("b.bin", b"bbb"), ("c.bin", b"ccc")]:
+        (d1 / name).write_bytes(content)
+        (d2 / name).write_bytes(content)
+    assert sync.hash_save_tree(d1) == sync.hash_save_tree(d2)
+
+
+# --- due_for_backup ---
+
+def _patched_state(monkeypatch, last_backup=None, last_hash=None):
+    s = {
+        "last_backup": {("dev" if last_backup is not None else "__x__"): last_backup} if last_backup else {},
+        "last_backup_hash": {("dev" if last_hash is not None else "__x__"): last_hash} if last_hash else {},
+        "pending": [], "notified": False, "status": "Idle",
+    }
+    monkeypatch.setattr(sync, "state", s)
+    monkeypatch.setattr(sync, "CONFIG", {"backup_hours": 8, "devices": {}})
+    return s
+
+
+def test_due_for_backup_no_prior_backup(monkeypatch):
+    _patched_state(monkeypatch)
+    assert sync.due_for_backup("dev", "anyhash") is True
+
+
+def test_due_for_backup_hash_changed(monkeypatch):
+    _patched_state(monkeypatch, last_backup=datetime.now(), last_hash="oldhash")
+    assert sync.due_for_backup("dev", "newhash") is True
+
+
+def test_due_for_backup_hash_unchanged_within_interval(monkeypatch):
+    _patched_state(monkeypatch, last_backup=datetime.now(), last_hash="samehash")
+    assert sync.due_for_backup("dev", "samehash") is False
+
+
+def test_due_for_backup_hash_unchanged_interval_expired(monkeypatch):
+    old = datetime.now() - timedelta(hours=9)
+    _patched_state(monkeypatch, last_backup=old, last_hash="samehash")
+    assert sync.due_for_backup("dev", "samehash") is True
+
+
+def test_due_for_backup_no_hash_in_state(monkeypatch):
+    s = {
+        "last_backup": {"dev": datetime.now()},
+        "last_backup_hash": {},
+        "pending": [], "notified": False, "status": "Idle",
+    }
+    monkeypatch.setattr(sync, "state", s)
+    monkeypatch.setattr(sync, "CONFIG", {"backup_hours": 8, "devices": {}})
+    assert sync.due_for_backup("dev", "anyhash") is True
+
+
+# --- compare_saves (homebrew filter) ---
 
 def test_compare_saves_ignores_homebrew_dirs(tmp_path, monkeypatch):
     t = time.time() - 100
