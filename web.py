@@ -1,7 +1,7 @@
 import json
 import os
 
-from flask import Flask, redirect, request
+from flask import Flask, jsonify, redirect, request
 
 from config import BACKUPS, CONFIG, save_config, state
 from sync import disk_usage_mb, run_sync, send_sms
@@ -11,17 +11,45 @@ app = Flask(__name__)
 
 @app.route("/")
 def index():
+    return """<!doctype html>
+<html>
+<head><title>VitaSync</title></head>
+<body>
+<h2>VitaSync</h2>
+<p><b>Status:</b> <span id="status"></span></p>
+<p><b>Mode:</b> <span id="mode"></span></p>
+<p><b>Devices:</b> <span id="devices"></span></p>
+<p><b>Pending:</b> <span id="pending"></span></p>
+<p><b>Disk:</b> <span id="disk"></span></p>
+<a href="/config">Config</a> | <a href="/backups">Backups</a>
+<script>
+function poll() {
+    fetch("/api/status").then(r => r.json()).then(d => {
+        document.getElementById("status").textContent = d.status;
+        document.getElementById("mode").textContent = d.mode;
+        document.getElementById("devices").textContent = JSON.stringify(d.devices);
+        document.getElementById("pending").textContent = JSON.stringify(d.pending);
+        document.getElementById("disk").textContent = d.disk_used + "/" + d.disk_total + "MB";
+    });
+}
+poll();
+setInterval(poll, 5000);
+</script>
+</body>
+</html>"""
+
+
+@app.route("/api/status")
+def api_status():
     used, total = disk_usage_mb()
-    return f"""
-    <h2>VitaSync</h2>
-    <b>Status:</b> {state['status']}<br>
-    <b>Mode:</b> {CONFIG['mode']}<br>
-    <b>Devices:</b> {CONFIG['devices']}<br>
-    <b>Pending:</b> {state['pending']}<br>
-    <b>Disk:</b> {used}/{total}MB<br><br>
-    <a href="/config">Config</a><br>
-    <a href="/backups">Backups</a>
-    """
+    return jsonify({
+        "status": state["status"],
+        "mode": CONFIG["mode"],
+        "devices": CONFIG["devices"],
+        "pending": [{"game": g, "src": s, "dst": d} for g, s, d in state["pending"]],
+        "disk_used": used,
+        "disk_total": total,
+    })
 
 
 @app.route("/backups")

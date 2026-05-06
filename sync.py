@@ -20,7 +20,8 @@ def port_open(ip):
     try:
         with socket.create_connection((ip, CONFIG["port"]), timeout=2):
             return True
-    except OSError:
+    except OSError as e:
+        print(f"    ftp {ip}:{CONFIG['port']} error: {e}")
         return False
 
 
@@ -101,31 +102,49 @@ def run_sync():
     state["notified"] = False
 
 
-def sync_loop():
+def sync_loop(dry_run=False):
     while True:
-        ready = [name for name, ip in CONFIG["devices"].items() if ping(ip) and port_open(ip)]
+        try:
+            ready = []
+            for name, ip in CONFIG["devices"].items():
+                p, o = ping(ip), port_open(ip)
+                print(f"  {name} ({ip}): ping={'ok' if p else 'fail'}, ftp={'ok' if o else 'fail'}", flush=True)
+                if p and o:
+                    ready.append(name)
 
-        if len(ready) >= 2:
-            state["status"] = "Devices ready"
+            if len(ready) >= 2:
+                state["status"] = "Devices ready"
 
-            for name in ready:
-                backup_device(name, CONFIG["devices"][name])
+                for name in ready:
+                    print(f"Backing up {name}...", flush=True)
+                    backup_device(name, CONFIG["devices"][name])
 
-            actions = compare_saves()
+                actions = compare_saves()
 
-            if actions:
-                summary = "\n".join(f"{g}: {s} -> {d}" for g, s, d in actions)
-                used, total = disk_usage_mb()
+                if dry_run:
+                    if actions:
+                        print("Dry-run: would sync:", flush=True)
+                        for game, src, dst in actions:
+                            print(f"  {game}: {src} -> {dst}", flush=True)
+                    else:
+                        print("Dry-run: saves are in sync, nothing to do", flush=True)
+                elif actions:
+                    summary = "\n".join(f"{g}: {s} -> {d}" for g, s, d in actions)
+                    used, total = disk_usage_mb()
 
-                if CONFIG["mode"] == "automatic-sync":
-                    state["pending"] = actions
-                    run_sync()
-                    send_sms(f"AUTO SYNC DONE\n{summary}\n{used}/{total}MB")
-                elif not state["notified"]:
-                    state["pending"] = actions
-                    send_sms(f"{summary}\nReply Y to sync\nMode: {CONFIG['mode']}")
-                    state["notified"] = True
-        else:
-            state["status"] = "Waiting for devices"
+                    if CONFIG["mode"] == "automatic-sync":
+                        state["pending"] = actions
+                        run_sync()
+                        send_sms(f"AUTO SYNC DONE\n{summary}\n{used}/{total}MB")
+                    elif not state["notified"]:
+                        state["pending"] = actions
+                        send_sms(f"{summary}\nReply Y to sync\nMode: {CONFIG['mode']}")
+                        state["notified"] = True
+            else:
+                state["status"] = "Waiting for devices"
+                print(f"Waiting ({len(ready)}/{len(CONFIG['devices'])} devices ready)", flush=True)
+
+        except Exception as e:
+            print(f"sync_loop error: {e}", flush=True)
 
         time.sleep(CHECK_INTERVAL)
