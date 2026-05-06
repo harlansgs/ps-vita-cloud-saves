@@ -158,3 +158,23 @@ def test_compare_saves_game_only_on_one_device(tmp_path, monkeypatch):
     assert len(actions) == 1
     assert actions[0][0] == "PCSG00205"
     assert actions[0][1] == "dev_a"
+
+
+def test_compare_saves_ignores_homebrew_dirs(tmp_path, monkeypatch):
+    t = time.time() - 100
+    new_t = time.time()
+
+    # Homebrew dir only on dev_a with newer mtime - should not appear in actions
+    _make_save(tmp_path / "dev_a" / "VITASHELL" / "save.bin", mtime=new_t)
+    _make_save(tmp_path / "dev_b" / "VITASHELL" / "save.bin", mtime=t)
+    # Real game present on both - should appear
+    _make_save(tmp_path / "dev_a" / "PCSG00205" / "save.bin", mtime=new_t)
+    _make_save(tmp_path / "dev_b" / "PCSG00205" / "save.bin", mtime=t)
+
+    monkeypatch.setattr(sync, "LATEST", tmp_path)
+    monkeypatch.setattr(sync, "CONFIG", {"devices": {"dev_a": "1.1.1.1", "dev_b": "2.2.2.2"}})
+
+    actions = sync.compare_saves()
+    game_ids_in_actions = [a[0] for a in actions]
+    assert "VITASHELL" not in game_ids_in_actions
+    assert "PCSG00205" in game_ids_in_actions

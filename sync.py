@@ -144,6 +144,10 @@ def backup_device(name, ip):
     if skipped:
         print(f"  Skipped non-game dirs: {', '.join(skipped)}", flush=True)
 
+    for item in dest.iterdir():
+        if item.is_dir() and not is_game_id(item.name, game_ids):
+            shutil.rmtree(item)
+
     ftp.quit()
 
     if due_for_backup(name):
@@ -154,14 +158,15 @@ def backup_device(name, ip):
 
 def compare_saves():
     actions = []
+    game_ids = load_game_ids()
     devices = list(CONFIG["devices"].keys())
 
     for i in range(len(devices)):
         for j in range(i + 1, len(devices)):
             dev_a, dev_b = devices[i], devices[j]
             dir_a, dir_b = LATEST / dev_a, LATEST / dev_b
-            games_a = set(os.listdir(dir_a)) if dir_a.exists() else set()
-            games_b = set(os.listdir(dir_b)) if dir_b.exists() else set()
+            games_a = {e for e in os.listdir(dir_a) if is_game_id(e, game_ids)} if dir_a.exists() else set()
+            games_b = {e for e in os.listdir(dir_b) if is_game_id(e, game_ids)} if dir_b.exists() else set()
 
             for game in games_a | games_b:
                 path_a, path_b = dir_a / game, dir_b / game
