@@ -1,0 +1,160 @@
+import os
+import time
+
+import pytest
+
+import sync
+
+
+HOMEBREW_IDS = ["VITASHELL", "SHARKF00D", "SAVEMGR00", "CTMANAGER", "PKGJ00000", "BHBB00001"]
+GAME_IDS = ["PCSG00205", "PCSB00244", "PCSE00412", "PCSG01293", "PCSF00249"]
+
+
+# --- is_game_id ---
+
+def test_is_game_id_known_games_with_database():
+    db = set(GAME_IDS)
+    for gid in GAME_IDS:
+        assert sync.is_game_id(gid, db), f"{gid} should be accepted"
+
+
+def test_is_game_id_homebrew_excluded_by_database():
+    db = set(GAME_IDS)
+    for hid in HOMEBREW_IDS:
+        assert not sync.is_game_id(hid, db), f"{hid} should be rejected"
+
+
+def test_is_game_id_regex_fallback_accepts_valid_format():
+    for gid in GAME_IDS:
+        assert sync.is_game_id(gid, set()), f"{gid} should pass regex"
+
+
+def test_is_game_id_regex_fallback_rejects_non_format():
+    # These don't match [A-Z]{4}\d{5} so regex catches them
+    for hid in ["VITASHELL", "SHARKF00D", "SAVEMGR00", "CTMANAGER"]:
+        assert not sync.is_game_id(hid, set()), f"{hid} should fail regex"
+
+
+# --- _parse_game_ids_tsv ---
+
+TSV_SAMPLE = (
+    "Title ID\tRegion\tName\tPkg direct link\n"
+    "PCSG00205\tJP\tSome Game\thttps://example.com/pkg\n"
+    "PCSB00244\tEU\tAnother Game\thttps://example.com/pkg2\n"
+    "INVALID__\tXX\tBad ID\thttps://example.com/bad\n"
+    "\t\t\t\n"
+)
+
+
+def test_parse_tsv_extracts_valid_ids():
+    result = sync._parse_game_ids_tsv(TSV_SAMPLE)
+    assert "PCSG00205" in result
+    assert "PCSB00244" in result
+
+
+def test_parse_tsv_rejects_invalid_ids():
+    result = sync._parse_game_ids_tsv(TSV_SAMPLE)
+    assert "INVALID__" not in result
+
+
+def test_parse_tsv_skips_empty_rows():
+    result = sync._parse_game_ids_tsv(TSV_SAMPLE)
+    assert "" not in result
+
+
+def test_parse_tsv_empty_content():
+    assert sync._parse_game_ids_tsv("") == set()
+    assert sync._parse_game_ids_tsv("Title ID\tRegion\n") == set()
+
+
+# --- latest_mtime ---
+
+def test_latest_mtime_empty_dir(tmp_path):
+    assert sync.latest_mtime(tmp_path) == 0
+
+
+def test_latest_mtime_single_file(tmp_path):
+    f = tmp_path / "save.bin"
+    f.write_bytes(b"data")
+    assert sync.latest_mtime(tmp_path) == pytest.approx(f.stat().st_mtime, abs=1.0)
+
+
+def test_latest_mtime_returns_newest(tmp_path):
+    old = tmp_path / "old.bin"
+    old.write_bytes(b"old")
+    old_mtime = time.time() - 100
+    os.utime(old, (old_mtime, old_mtime))
+
+    new = tmp_path / "new.bin"
+    new.write_bytes(b"new")
+
+    assert sync.latest_mtime(tmp_path) == pytest.approx(new.stat().st_mtime, abs=1.0)
+
+
+def test_latest_mtime_nested(tmp_path):
+    sub = tmp_path / "subdir"
+    sub.mkdir()
+    f = sub / "deep.bin"
+    f.write_bytes(b"x")
+    assert sync.latest_mtime(tmp_path) == pytest.approx(f.stat().st_mtime, abs=1.0)
+
+
+# --- compare_saves ---
+
+def _make_save(path, content=b"data", mtime=None):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    if mtime is not None:
+        os.utime(path, (mtime, mtime))
+
+
+def test_compare_saves_newer_on_a(tmp_path, monkeypatch):
+    old_t = time.time() - 100
+    new_t = time.time()
+
+    _make_save(tmp_path / "dev_a" / "PCSG00205" / "save.bin", mtime=new_t)
+    _make_save(tmp_path / "dev_b" / "PCSG00205" / "save.bin", mtime=old_t)
+
+    monkeypatch.setattr(sync, "LATEST", tmp_path)
+    monkeypatch.setattr(sync, "CONFIG", {"devices": {"dev_a": "1.1.1.1", "dev_b": "2.2.2.2"}})
+
+    actions = sync.compare_saves()
+    assert actions == [("PCSG00205", "dev_a", "dev_b")]
+
+
+def test_compare_saves_newer_on_b(tmp_path, monkeypatch):
+    old_t = time.time() - 100
+    new_t = time.time()
+
+    _make_save(tmp_path / "dev_a" / "PCSG00205" / "save.bin", mtime=old_t)
+    _make_save(tmp_path / "dev_b" / "PCSG00205" / "save.bin", mtime=new_t)
+
+    monkeypatch.setattr(sync, "LATEST", tmp_path)
+    monkeypatch.setattr(sync, "CONFIG", {"devices": {"dev_a": "1.1.1.1", "dev_b": "2.2.2.2"}})
+
+    actions = sync.compare_saves()
+    assert actions == [("PCSG00205", "dev_b", "dev_a")]
+
+
+def test_compare_saves_in_sync(tmp_path, monkeypatch):
+    t = time.time() - 50
+
+    _make_save(tmp_path / "dev_a" / "PCSG00205" / "save.bin", mtime=t)
+    _make_save(tmp_path / "dev_b" / "PCSG00205" / "save.bin", mtime=t)
+
+    monkeypatch.setattr(sync, "LATEST", tmp_path)
+    monkeypatch.setattr(sync, "CONFIG", {"devices": {"dev_a": "1.1.1.1", "dev_b": "2.2.2.2"}})
+
+    assert sync.compare_saves() == []
+
+
+def test_compare_saves_game_only_on_one_device(tmp_path, monkeypatch):
+    _make_save(tmp_path / "dev_a" / "PCSG00205" / "save.bin")
+
+    monkeypatch.setattr(sync, "LATEST", tmp_path)
+    monkeypatch.setattr(sync, "CONFIG", {"devices": {"dev_a": "1.1.1.1", "dev_b": "2.2.2.2"}})
+
+    actions = sync.compare_saves()
+    assert len(actions) == 1
+    assert actions[0][0] == "PCSG00205"
+    assert actions[0][1] == "dev_a"

@@ -1,14 +1,83 @@
+import csv
 import os
+import re
 import shutil
 import socket
 import subprocess
 import time
+import urllib.request
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from twilio.rest import Client
 
 from config import BASE, BACKUPS, CHECK_INTERVAL, CONFIG, LATEST, state
 from ftp import ftp_connect, ftp_download_dir, ftp_upload_dir
+
+NPS_PSV_TSV = "https://nopaystation.com/tsv/PSV_GAMES.tsv"
+GAME_IDS_CACHE = BASE / "psv_game_ids.txt"
+BUNDLED_TSV = Path(__file__).parent / "data" / "psv_games.tsv"
+GAME_ID_RE = re.compile(r"^[A-Z]{4}\d{5}$")
+
+_game_ids: set = set()
+
+
+def _parse_game_ids_tsv(content: str) -> set:
+    ids = set()
+    reader = csv.reader(content.splitlines(), delimiter="\t")
+    next(reader, None)
+    for row in reader:
+        if row and GAME_ID_RE.match(row[0]):
+            ids.add(row[0])
+    return ids
+
+
+def _fetch_game_ids() -> set:
+    try:
+        req = urllib.request.Request(NPS_PSV_TSV, headers={"User-Agent": "VitaSync/1.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            content = resp.read().decode("utf-8")
+        ids = _parse_game_ids_tsv(content)
+        GAME_IDS_CACHE.write_text("\n".join(sorted(ids)))
+        print(f"Game ID database updated: {len(ids)} titles cached", flush=True)
+        return ids
+    except Exception as e:
+        print(f"Warning: could not fetch game ID database: {e}", flush=True)
+        return set()
+
+
+def load_game_ids() -> set:
+    global _game_ids
+    if _game_ids:
+        return _game_ids
+
+    stale = not GAME_IDS_CACHE.exists() or (
+        datetime.now() - datetime.fromtimestamp(GAME_IDS_CACHE.stat().st_mtime) > timedelta(days=7)
+    )
+    if stale:
+        fetched = _fetch_game_ids()
+        if fetched:
+            _game_ids = fetched
+            return _game_ids
+
+    if GAME_IDS_CACHE.exists():
+        _game_ids = set(GAME_IDS_CACHE.read_text().splitlines())
+        print(f"Loaded {len(_game_ids)} game IDs from cache", flush=True)
+        return _game_ids
+
+    if BUNDLED_TSV.exists():
+        _game_ids = _parse_game_ids_tsv(BUNDLED_TSV.read_text(encoding="utf-8"))
+        print(f"Loaded {len(_game_ids)} game IDs from bundled TSV", flush=True)
+        return _game_ids
+
+    print("Warning: game ID database unavailable, falling back to regex filter", flush=True)
+    return set()
+
+
+def is_game_id(name: str, game_ids: set) -> bool:
+    if game_ids:
+        return name in game_ids
+    return bool(GAME_ID_RE.match(name))
 
 
 def ping(ip):
@@ -21,7 +90,7 @@ def port_open(ip):
         with socket.create_connection((ip, CONFIG["port"]), timeout=2):
             return True
     except OSError as e:
-        print(f"    ftp {ip}:{CONFIG['port']} error: {e}")
+        print(f"    ftp {ip}:{CONFIG['port']} error: {e}", flush=True)
         return False
 
 
@@ -52,11 +121,29 @@ def send_sms(msg):
 
 
 def backup_device(name, ip):
+    game_ids = load_game_ids()
     ftp = ftp_connect(ip)
     dest = LATEST / name
     dest.mkdir(parents=True, exist_ok=True)
     ftp.cwd(CONFIG["remote_path"])
-    ftp_download_dir(ftp, dest)
+
+    lines = []
+    ftp.retrlines("LIST", lines.append)
+    skipped = []
+    for line in lines:
+        entry = line.split()[-1]
+        if not line.startswith("d"):
+            continue
+        if not is_game_id(entry, game_ids):
+            skipped.append(entry)
+            continue
+        ftp.cwd(entry)
+        ftp_download_dir(ftp, dest / entry)
+        ftp.cwd("..")
+
+    if skipped:
+        print(f"  Skipped non-game dirs: {', '.join(skipped)}", flush=True)
+
     ftp.quit()
 
     if due_for_backup(name):
@@ -66,7 +153,6 @@ def backup_device(name, ip):
 
 
 def compare_saves():
-    """Return list of (game, src_device, dst_device) where src has a newer save than dst."""
     actions = []
     devices = list(CONFIG["devices"].keys())
 
