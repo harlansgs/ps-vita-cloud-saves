@@ -1,18 +1,66 @@
 # Vita "cloud" saves server [VCS]
 
-After configuration, all you have to do is open Vita Shell --> FTP on the desired Vita/TV consoles. This script will then connect to each, backup your saves directory, and push your most recent saves to out-of-sync devices. Only the most recent save files found will be shared to other Vita/TV devices, and a redundant set of backups are stored on the synchronization host to help prevent data loss.
+A poor man's cloud saves for PS Vita / PS TV consoles.
 
-Note that the script is intended to run as a daemon. Set this up on a Pi or old laptop and let it run. Then when you want to sync saves between your consoles, simply open VitaShell and enable FTP on each device you want to sync. The rest is done for you automatically.
-- Notification of syncing is shown on the default dashboard page, but if you add your Twilio API key (free tier is fine) you can get SMS updates whenever sync is complete. These messages will include space remaining on the save synchronization host, and can optionally take a text in response to confirm prior to save sync. AWS keys can also be added for uploading backups to/from s3 for a true "cloud saves" integration.
+Open VitaShell -> Network -> FTP server on each console you want to sync.
+VitaSync detects them on the network, pulls saves from each, and pushes
+the most recent version of each game's save to any device that is behind.
 
-Restrictions:
-- this is designed for the case that all your devices are connected to the same network
-- this is designed around the synchronization server always running -- you can just run the script when you need it but a cheap raspberry pi, old laptop, etc is recommended for a more painless "cloud saves" sort of functionality
+Saves are validated against the NoPayStation game database so only real
+game saves are synced -- homebrew and utility directories are ignored.
+A local backup snapshot is kept and only updated when save content actually
+changes, so identical snapshots do not accumulate.
 
-### Default configuration reference
+## Setup
 
-TODO
+```sh
+git clone <repo>
+cd VitaSync
+bash setup.sh
 
-### How to add devices, handling synchronization paths
+# Register your consoles (check the IP shown in VitaShell)
+python3 server.py --add-device vita_1 192.168.1.x
+python3 server.py --add-device vita_tv 192.168.1.x
 
-TODO
+# Verify detection before running for real
+python3 server.py --dry-run
+
+# Run
+python3 server.py
+```
+
+The web interface is available at http://localhost:5000.
+
+## Configuration reference
+
+Settings are stored in `vitasync_data/config.json`.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `devices` | `{}` | Map of name -> IP for each console |
+| `port` | `1337` | VitaShell FTP port |
+| `remote_path` | `ux0:/user/00/savedata` | Save directory on device |
+| `mode` | `manual` | `manual` or `automatic-sync` |
+| `backup_hours` | `8` | Max interval between backup snapshots (hours) |
+| `storage_warn_mb` | `28000` | Disk warning threshold (MB) |
+
+In `manual` mode, detected sync actions are queued and shown in the web UI
+with a "Sync now" button. In `automatic-sync` mode, syncs run immediately
+with no confirmation required.
+
+## How to add devices
+
+1. Open VitaShell on the console, go to Network -> FTP server. Note the IP shown.
+2. Run: `python3 server.py --add-device NAME IP`
+3. Repeat for each console. At least two must be online simultaneously for sync to run.
+
+If you changed the default VitaShell FTP port from 1337:
+```
+python3 server.py --ftp-port PORT
+```
+
+## Restrictions
+
+- All devices must be on the same local network.
+- The server must be running when you want to sync. A Raspberry Pi or similar
+  always-on device is recommended for seamless operation.

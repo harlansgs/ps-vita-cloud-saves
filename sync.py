@@ -10,8 +10,6 @@ import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from twilio.rest import Client
-
 from config import BASE, BACKUPS, CHECK_INTERVAL, CONFIG, LATEST, state
 from ftp import ftp_connect, ftp_download_dir, ftp_upload_dir
 
@@ -132,13 +130,6 @@ def due_for_backup(name: str, current_hash: str) -> bool:
     return datetime.now() - last > timedelta(hours=CONFIG["backup_hours"])
 
 
-def send_sms(msg):
-    if not CONFIG["sms_enabled"]:
-        return
-    t = CONFIG["twilio"]
-    Client(t["sid"], t["token"]).messages.create(body=msg, from_=t["from"], to=t["to"])
-
-
 def backup_device(name, ip):
     game_ids = load_game_ids()
     ftp = ftp_connect(ip)
@@ -256,16 +247,15 @@ def sync_loop(dry_run=False):
                         print("Dry-run: saves are in sync, nothing to do", flush=True)
                 elif actions:
                     summary = "\n".join(f"{g}: {s} -> {d}" for g, s, d in actions)
-                    used, total = disk_usage_mb()
 
                     if CONFIG["mode"] == "automatic-sync":
                         state["pending"] = actions
                         run_sync()
-                        send_sms(f"AUTO SYNC DONE\n{summary}\n{used}/{total}MB")
+                        print(f"Auto sync complete:\n{summary}", flush=True)
                     elif not state["notified"]:
                         state["pending"] = actions
-                        send_sms(f"{summary}\nReply Y to sync\nMode: {CONFIG['mode']}")
                         state["notified"] = True
+                        print(f"Sync needed (manual mode):\n{summary}", flush=True)
             else:
                 waiting_streak += 1
                 state["status"] = "Waiting for devices"

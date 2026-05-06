@@ -1,17 +1,19 @@
 import json
 import os
 
-from flask import Flask, jsonify, redirect, request
+from flask import Flask, jsonify, redirect, request, url_for
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from config import BACKUPS, CONFIG, save_config, state
-from sync import disk_usage_mb, run_sync, send_sms
+from sync import disk_usage_mb, run_sync
 
 app = Flask(__name__)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 
 @app.route("/")
 def index():
-    return """<!doctype html>
+    return f"""<!doctype html>
 <html>
 <head><title>VitaSync</title></head>
 <body>
@@ -19,19 +21,24 @@ def index():
 <p><b>Status:</b> <span id="status"></span></p>
 <p><b>Mode:</b> <span id="mode"></span></p>
 <p><b>Devices:</b> <span id="devices"></span></p>
-<p><b>Pending:</b> <span id="pending"></span></p>
+<p><b>Pending:</b> <span id="pending"></span>
+<button id="syncbtn" style="display:none" onclick="triggerSync()">Sync now</button></p>
 <p><b>Disk:</b> <span id="disk"></span></p>
-<a href="/config">Config</a> | <a href="/backups">Backups</a>
+<a href="{url_for('config')}">Config</a> | <a href="{url_for('backups')}">Backups</a>
 <script>
-function poll() {
-    fetch("/api/status").then(r => r.json()).then(d => {
+function triggerSync() {{
+    fetch("{url_for('sync_now')}", {{method:"POST"}}).then(r => r.json()).then(d => alert(d.message));
+}}
+function poll() {{
+    fetch("{url_for('api_status')}").then(r => r.json()).then(d => {{
         document.getElementById("status").textContent = d.status;
         document.getElementById("mode").textContent = d.mode;
         document.getElementById("devices").textContent = JSON.stringify(d.devices);
         document.getElementById("pending").textContent = JSON.stringify(d.pending);
         document.getElementById("disk").textContent = d.disk_used + "/" + d.disk_total + "MB";
-    });
-}
+        document.getElementById("syncbtn").style.display = d.pending.length ? "inline" : "none";
+    }});
+}}
 poll();
 setInterval(poll, 5000);
 </script>
@@ -52,6 +59,14 @@ def api_status():
     })
 
 
+@app.route("/sync", methods=["POST"])
+def sync_now():
+    if state["pending"]:
+        run_sync()
+        return jsonify({"ok": True, "message": "Sync triggered"})
+    return jsonify({"ok": False, "message": "Nothing pending"})
+
+
 @app.route("/backups")
 def backups():
     items = os.listdir(BACKUPS) if BACKUPS.exists() else []
@@ -62,48 +77,21 @@ def backups():
 def config():
     if request.method == "POST":
         CONFIG["mode"] = request.form.get("mode", "manual")
-        CONFIG["sms_enabled"] = "sms" in request.form
         CONFIG["devices"] = json.loads(request.form["devices"])
-        CONFIG["twilio"]["sid"] = request.form["sid"]
-        CONFIG["twilio"]["token"] = request.form["token"]
-        CONFIG["twilio"]["from"] = request.form["from"]
-        CONFIG["twilio"]["to"] = request.form["to"]
         save_config()
-        return redirect("/config")
+        return redirect(url_for('config'))
 
-    sms_checked = "checked" if CONFIG["sms_enabled"] else ""
     return f"""
     <h3>Config</h3>
     <form method="post">
-    Mode: <input name="mode" value="{CONFIG['mode']}"><br>
-    SMS Enabled: <input type="checkbox" name="sms" {sms_checked}><br>
+    Mode: <select name="mode">
+        <option value="manual"{"selected" if CONFIG["mode"] == "manual" else ""}>manual</option>
+        <option value="automatic-sync"{"selected" if CONFIG["mode"] == "automatic-sync" else ""
+        }>automatic-sync</option>
+    </select><br>
     Devices JSON:<br>
     <textarea name="devices" rows="5" cols="40">{json.dumps(CONFIG["devices"], indent=2)
     }</textarea><br>
-    <h4>Twilio (stored in plaintext JSON)</h4>
-    SID: <input name="sid" value="{CONFIG['twilio']['sid']}"><br>
-    Token: <input name="token" value="{CONFIG['twilio']['token']}"><br>
-    From: <input name="from" value="{CONFIG['twilio']['from']}"><br>
-    To: <input name="to" value="{CONFIG['twilio']['to']}"><br>
     <button type="submit">Save</button>
     </form>
     """
-
-
-@app.route("/sms", methods=["POST"])
-def sms():
-    msg = request.form.get("Body", "").lower()
-
-    if msg == "y":
-        run_sync()
-        send_sms("Sync complete")
-    elif msg == "auto":
-        CONFIG["mode"] = "automatic-sync"
-        save_config()
-        send_sms("Auto mode enabled")
-    elif msg == "manual":
-        CONFIG["mode"] = "manual"
-        save_config()
-        send_sms("Manual mode enabled")
-
-    return "OK"

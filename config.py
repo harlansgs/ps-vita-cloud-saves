@@ -16,8 +16,6 @@ def load_config():
             "port": 1337,
             "remote_path": "ux0:/user/00/savedata",
             "mode": "manual",
-            "sms_enabled": True,
-            "twilio": {"sid": "", "token": "", "from": "", "to": ""},
             "backup_hours": 8,
             "storage_warn_mb": 28000,
         }
