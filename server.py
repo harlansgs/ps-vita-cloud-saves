@@ -1,6 +1,8 @@
 import argparse
 import threading
 
+from waitress import serve
+
 from config import BACKUPS, CONFIG, LATEST, save_config
 from sync import sync_loop
 from web import app
@@ -42,7 +44,7 @@ def main():
     BACKUPS.mkdir(parents=True, exist_ok=True)
 
     threading.Thread(target=sync_loop, args=(args.dry_run,), daemon=True).start()
-    app.run(host="0.0.0.0", port=args.web_port)
+    serve(app, host="127.0.0.1", port=args.web_port)
 
 
 if __name__ == "__main__":

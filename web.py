@@ -1,3 +1,4 @@
+import html
 import json
 import os
 
@@ -9,6 +10,8 @@ from sync import disk_usage_mb, run_sync
 
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
+VALID_MODES = {"manual", "automatic-sync"}
 
 
 @app.route("/")
@@ -70,28 +73,40 @@ def sync_now():
 @app.route("/backups")
 def backups():
     items = os.listdir(BACKUPS) if BACKUPS.exists() else []
-    return "<br>".join(items)
+    rows = "<br>".join(html.escape(item) for item in sorted(items))
+    return f"<!doctype html><html><body>{rows}</body></html>"
 
 
 @app.route("/config", methods=["GET", "POST"])
 def config():
+    error = None
     if request.method == "POST":
-        CONFIG["mode"] = request.form.get("mode", "manual")
-        CONFIG["devices"] = json.loads(request.form["devices"])
-        save_config()
-        return redirect(url_for('config'))
+        mode = request.form.get("mode", "manual")
+        if mode not in VALID_MODES:
+            mode = "manual"
+        try:
+            devices = json.loads(request.form["devices"])
+        except (json.JSONDecodeError, KeyError):
+            error = "Invalid JSON in devices field."
+        else:
+            CONFIG["mode"] = mode
+            CONFIG["devices"] = devices
+            save_config()
+            return redirect(url_for('config'))
 
+    devices_json = html.escape(json.dumps(CONFIG["devices"], indent=2))
+    error_html = f'<p style="color:red">{html.escape(error)}</p>' if error else ""
     return f"""
     <h3>Config</h3>
+    {error_html}
     <form method="post">
     Mode: <select name="mode">
-        <option value="manual"{"selected" if CONFIG["mode"] == "manual" else ""}>manual</option>
-        <option value="automatic-sync"{"selected" if CONFIG["mode"] == "automatic-sync" else ""
+        <option value="manual"{" selected" if CONFIG["mode"] == "manual" else ""}>manual</option>
+        <option value="automatic-sync"{" selected" if CONFIG["mode"] == "automatic-sync" else ""
         }>automatic-sync</option>
     </select><br>
     Devices JSON:<br>
-    <textarea name="devices" rows="5" cols="40">{json.dumps(CONFIG["devices"], indent=2)
-    }</textarea><br>
+    <textarea name="devices" rows="5" cols="40">{devices_json}</textarea><br>
     <button type="submit">Save</button>
     </form>
     """
