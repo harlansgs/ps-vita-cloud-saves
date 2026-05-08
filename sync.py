@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from config import BASE, BACKUPS, CHECK_INTERVAL, CONFIG, LATEST, state
-from ftp import ftp_connect, ftp_download_dir, ftp_upload_dir
+from ftp import ftp_connect, ftp_download_dir, ftp_rmtree, ftp_upload_dir
 
 NPS_PSV_TSV = "https://nopaystation.com/tsv/PSV_GAMES.tsv"
 GAME_IDS_CACHE = BASE / "psv_game_ids.txt"
@@ -190,9 +190,16 @@ def compare_saves():
 
             for game in games_a | games_b:
                 path_a, path_b = dir_a / game, dir_b / game
-                mtime_a = latest_mtime(path_a) if path_a.exists() else 0
-                mtime_b = latest_mtime(path_b) if path_b.exists() else 0
-
+                if not path_a.exists():
+                    actions.append((game, dev_b, dev_a))
+                    continue
+                if not path_b.exists():
+                    actions.append((game, dev_a, dev_b))
+                    continue
+                if hash_save_tree(path_a) == hash_save_tree(path_b):
+                    continue
+                mtime_a = latest_mtime(path_a)
+                mtime_b = latest_mtime(path_b)
                 if mtime_a > mtime_b:
                     actions.append((game, dev_a, dev_b))
                 elif mtime_b > mtime_a:
@@ -210,7 +217,17 @@ def run_sync():
         except ftplib.error_perm:
             pass
         ftp.cwd(game)
-        ftp_upload_dir(ftp, LATEST / src / game)
+        try:
+            ftp_upload_dir(ftp, LATEST / src / game)
+        except Exception as e:
+            ftp.cwd("..")
+            try:
+                ftp_rmtree(ftp, game)
+                print(f"  Rolled back partial upload of {game} to {dst}", flush=True)
+            except Exception:
+                pass
+            ftp.quit()
+            raise
         ftp.quit()
 
     state["pending"] = []
