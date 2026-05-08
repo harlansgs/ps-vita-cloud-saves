@@ -110,7 +110,7 @@ def sync_now():
 def backups():
     items = os.listdir(BACKUPS) if BACKUPS.exists() else []
     rows = "<br>".join(html.escape(item) for item in sorted(items))
-    return f'<!doctype html><html><body><p><a href="/">Home</a> | <a href="{url_for("index")}">VitaSync</a></p>{rows}</body></html>'
+    return f'<!doctype html><html><body>{rows}<p><a href="/">Home</a> | <a href="{url_for("index")}">VitaSync</a></p></body></html>'
 
 
 @app.route("/config", methods=["GET", "POST"])
@@ -136,7 +136,6 @@ def config():
     devices_json = html.escape(json.dumps(CONFIG["devices"], indent=2))
     error_html = f'<p style="color:red">{html.escape(error)}</p>' if error else ""
     return f"""
-    <p><a href="/">Home</a> | <a href="{url_for('index')}">VitaSync</a></p>
     <h3>Config</h3>
     {error_html}
     <form method="post">
@@ -149,4 +148,5 @@ def config():
     <textarea name="devices" rows="5" cols="40">{devices_json}</textarea><br>
     <button type="submit">Save</button>
     </form>
+    <p><a href="/">Home</a> | <a href="{url_for('index')}">VitaSync</a></p>
     """
