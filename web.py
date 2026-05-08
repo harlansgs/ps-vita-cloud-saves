@@ -38,22 +38,44 @@ def index():
 <p><b>Status:</b> <span id="status"></span></p>
 <p><b>Mode:</b> <span id="mode"></span></p>
 <p><b>Devices:</b> <span id="devices"></span></p>
-<p><b>Pending:</b> <span id="pending"></span>
-<button id="syncbtn" style="display:none" onclick="triggerSync()">Sync now</button></p>
+<p><b>Pending:</b> <span id="pending"></span></p>
 <p><b>Disk:</b> <span id="disk"></span></p>
 <a href="/">Home</a> | <a href="{url_for('config')}">Config</a> | <a href="{url_for('backups')}">Backups</a>
+| <button onclick="openSyncDlg()">Sync...</button>
+<dialog id="syncdlg">
+  <div id="dlgbody"></div>
+  <div id="dlgactions"></div>
+</dialog>
 <script>
-function triggerSync() {{
-    fetch("{url_for('sync_now')}", {{method:"POST"}}).then(r => r.json()).then(d => alert(d.message));
+var _pending = [];
+function openSyncDlg() {{
+    var body = document.getElementById("dlgbody");
+    var actions = document.getElementById("dlgactions");
+    var dlg = document.getElementById("syncdlg");
+    if (_pending.length === 0) {{
+        body.textContent = "All saves are in sync.";
+        actions.innerHTML = '<button onclick="document.getElementById(\'syncdlg\').close()">Close</button>';
+    }} else {{
+        body.innerHTML = _pending.map(function(p) {{
+            return "<p>" + p.game + ": " + p.src + " -&gt; " + p.dst + "</p>";
+        }}).join("");
+        actions.innerHTML = '<button onclick="doSync()">Sync</button> <button onclick="document.getElementById(\'syncdlg\').close()">Cancel</button>';
+    }}
+    dlg.showModal();
+}}
+function doSync() {{
+    fetch("{url_for('sync_now')}", {{method:"POST"}}).then(function() {{
+        document.getElementById("syncdlg").close();
+    }});
 }}
 function poll() {{
     fetch("{url_for('api_status')}").then(r => r.json()).then(d => {{
+        _pending = d.pending;
         document.getElementById("status").textContent = d.status;
         document.getElementById("mode").textContent = d.mode;
         document.getElementById("devices").textContent = JSON.stringify(d.devices);
-        document.getElementById("pending").textContent = JSON.stringify(d.pending);
+        document.getElementById("pending").textContent = d.pending.length ? d.pending.length + " pending" : "none";
         document.getElementById("disk").textContent = d.disk_used + "/" + d.disk_total + "MB";
-        document.getElementById("syncbtn").style.display = d.pending.length ? "inline" : "none";
     }});
 }}
 poll();
