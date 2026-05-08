@@ -48,18 +48,19 @@ def index():
 </dialog>
 <script>
 var _pending = [];
+function closeSyncDlg() {{ document.getElementById("syncdlg").close(); }}
 function openSyncDlg() {{
     var body = document.getElementById("dlgbody");
     var actions = document.getElementById("dlgactions");
     var dlg = document.getElementById("syncdlg");
     if (_pending.length === 0) {{
         body.textContent = "All saves are in sync.";
-        actions.innerHTML = '<button onclick="document.getElementById(\'syncdlg\').close()">Close</button>';
+        actions.innerHTML = '<button onclick="closeSyncDlg()">Close</button>';
     }} else {{
         body.innerHTML = _pending.map(function(p) {{
             return "<p>" + p.game + ": " + p.src + " -&gt; " + p.dst + "</p>";
         }}).join("");
-        actions.innerHTML = '<button onclick="doSync()">Sync</button> <button onclick="document.getElementById(\'syncdlg\').close()">Cancel</button>';
+        actions.innerHTML = '<button onclick="doSync()">Sync</button> <button onclick="closeSyncDlg()">Cancel</button>';
     }}
     dlg.showModal();
 }}

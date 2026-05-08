@@ -213,13 +213,24 @@ def sync_loop(dry_run=False):
     waiting_streak = 0
     last_quiet_log = 0.0
     quiet = False
+    prev_device_state = {}  # name -> (ping_ok, ftp_ok)
 
     while True:
         try:
             ready = []
             for name, ip in CONFIG["devices"].items():
                 p, o = ping(ip), port_open(ip, verbose=not quiet)
-                if not quiet:
+                prev = prev_device_state.get(name)
+                cur = (p, o)
+                if cur != prev:
+                    print(
+                        f"  {name} ({ip}): ping={'ok' if p else 'fail'}, ftp={'ok' if o else 'fail'}",
+                        flush=True,
+                    )
+                    prev_device_state[name] = cur
+                    if quiet:
+                        last_quiet_log = time.monotonic()
+                elif not quiet:
                     print(f"  {name} ({ip}): ping={'ok' if p else 'fail'}, ftp={'ok' if o else 'fail'}",
                           flush=True)
                 if p and o:
