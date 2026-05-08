@@ -141,6 +141,7 @@ def backup_device(name, ip):
     lines = []
     ftp.retrlines("LIST", lines.append)
     skipped = []
+    device_games = set()
     for line in lines:
         entry = line.split()[-1]
         if not line.startswith("d"):
@@ -148,6 +149,7 @@ def backup_device(name, ip):
         if not is_game_id(entry, game_ids):
             skipped.append(entry)
             continue
+        device_games.add(entry)
         ftp.cwd(entry)
         ftp_download_dir(ftp, dest / entry)
         ftp.cwd("..")
@@ -158,7 +160,8 @@ def backup_device(name, ip):
         _last_skipped[name] = skipped_set
 
     for item in dest.iterdir():
-        if item.is_dir() and not is_game_id(item.name, game_ids):
+        if item.is_dir() and item.name not in device_games:
+            print(f"  Removed local {item.name} (deleted from device)", flush=True)
             shutil.rmtree(item)
 
     ftp.quit()
@@ -268,10 +271,16 @@ def sync_loop(dry_run=False):
                         state["pending"] = actions
                         run_sync()
                         print(f"Auto sync complete:\n{summary}", flush=True)
-                    elif not state["notified"]:
+                    else:
                         state["pending"] = actions
-                        state["notified"] = True
-                        print(f"Sync needed (manual mode):\n{summary}", flush=True)
+                        if not state["notified"]:
+                            state["notified"] = True
+                            print(f"Sync needed (manual mode):\n{summary}", flush=True)
+                else:
+                    if state["pending"]:
+                        print("Saves are now in sync.", flush=True)
+                    state["pending"] = []
+                    state["notified"] = False
             else:
                 waiting_streak += 1
                 state["status"] = "Waiting for devices"
