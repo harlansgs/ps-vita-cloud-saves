@@ -1,4 +1,6 @@
 import ftplib
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 from config import CONFIG
@@ -25,6 +27,12 @@ def ftp_download_dir(ftp, local):
         else:
             with open(local / name, "wb") as f:
                 ftp.retrbinary(f"RETR {name}", f.write)
+            try:
+                resp = ftp.sendcmd(f"MDTM {name}")
+                mtime = datetime.strptime(resp[4:], "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc).timestamp()
+                os.utime(local / name, (mtime, mtime))
+            except Exception:
+                pass
 
 
 def ftp_upload_dir(ftp, local):

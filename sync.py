@@ -1,4 +1,5 @@
 import csv
+import ftplib
 import hashlib
 import os
 import re
@@ -201,6 +202,10 @@ def run_sync():
     for game, src, dst in state["pending"]:
         ftp = ftp_connect(CONFIG["devices"][dst])
         ftp.cwd(CONFIG["remote_path"])
+        try:
+            ftp.mkd(game)
+        except ftplib.error_perm:
+            pass
         ftp.cwd(game)
         ftp_upload_dir(ftp, LATEST / src / game)
         ftp.quit()

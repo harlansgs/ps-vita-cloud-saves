@@ -1,13 +1,15 @@
 import html
+import io
 import ipaddress
 import json
 import os
+import zipfile
 
 from flask import Flask, jsonify, redirect, request, url_for
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from config import BACKUPS, CONFIG, save_config, state
-from sync import disk_usage_mb, run_sync
+from sync import disk_usage_mb, port_open, run_sync
 
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
@@ -83,9 +85,16 @@ function openSyncDlg() {{
     dlg.showModal();
 }}
 function doSync() {{
-    fetch("{url_for('sync_now')}", {{method:"POST"}}).then(function() {{
-        document.getElementById("syncdlg").close();
-    }});
+    fetch("{url_for('sync_now')}", {{method:"POST"}})
+        .then(function(r) {{ return r.json(); }})
+        .then(function(d) {{
+            if (d.ok) {{
+                closeSyncDlg();
+            }} else {{
+                document.getElementById("dlgbody").textContent = d.message;
+                document.getElementById("dlgactions").innerHTML = '<button onclick="closeSyncDlg()">Close</button>';
+            }}
+        }});
 }}
 function poll() {{
     fetch("{url_for('api_status')}").then(r => r.json()).then(d => {{
@@ -119,16 +128,23 @@ def api_status():
 
 @app.route("/sync", methods=["POST"])
 def sync_now():
-    if state["pending"]:
-        run_sync()
-        return jsonify({"ok": True, "message": "Sync triggered"})
-    return jsonify({"ok": False, "message": "Nothing pending"})
+    if not state["pending"]:
+        return jsonify({"ok": False, "message": "Nothing pending"})
+    dst_names = {dst for _, _, dst in state["pending"]}
+    offline = sorted(n for n in dst_names if not port_open(CONFIG["devices"][n], verbose=False))
+    if offline:
+        return jsonify({"ok": False, "message": f"Device(s) offline: {', '.join(offline)}"})
+    run_sync()
+    return jsonify({"ok": True, "message": "Sync complete"})
 
 
 @app.route("/backups")
 def backups():
-    items = os.listdir(BACKUPS) if BACKUPS.exists() else []
-    rows = "".join(f"<p>{html.escape(item)}</p>" for item in sorted(items)) or "<p>No backups yet.</p>"
+    items = sorted(os.listdir(BACKUPS)) if BACKUPS.exists() else []
+    rows = "".join(
+        f'<p><a href="{url_for("backup_detail", snapshot=item)}">{html.escape(item)}</a></p>'
+        for item in items
+    ) or "<p>No backups yet.</p>"
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -143,6 +159,54 @@ def backups():
 <p class="nav"><a href="/">Home</a> | <a href="{url_for('index')}">VitaSync</a> | <a href="{url_for('config')}">Config</a></p>
 </body>
 </html>"""
+
+
+@app.route("/backups/<snapshot>")
+def backup_detail(snapshot):
+    snap_path = (BACKUPS / snapshot).resolve()
+    if snap_path.parent != BACKUPS.resolve() or not snap_path.is_dir():
+        return "Not found", 404
+    games = sorted(p.name for p in snap_path.iterdir() if p.is_dir())
+    rows = "".join(
+        f'<p><a href="{url_for("backup_download", snapshot=snapshot, game=game)}">'
+        f'{html.escape(game)}</a></p>'
+        for game in games
+    ) or "<p>No saves in this backup.</p>"
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VitaSync - {html.escape(snapshot)}</title>
+  <style>{COMMON_STYLE}</style>
+</head>
+<body>
+<h2>{html.escape(snapshot)}</h2>
+{rows}
+<p class="nav"><a href="/">Home</a> | <a href="{url_for('index')}">VitaSync</a> | <a href="{url_for('backups')}">Backups</a></p>
+</body>
+</html>"""
+
+
+@app.route("/backups/<snapshot>/<game>")
+def backup_download(snapshot, game):
+    snap_path = (BACKUPS / snapshot).resolve()
+    game_path = (snap_path / game).resolve()
+    if (snap_path.parent != BACKUPS.resolve() or game_path.parent != snap_path
+            or not game_path.is_dir()):
+        return "Not found", 404
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for fpath in sorted(game_path.rglob("*")):
+            if fpath.is_file():
+                zf.write(fpath, fpath.relative_to(game_path))
+    buf.seek(0)
+    filename = f"{snapshot}_{game}.zip"
+    return app.response_class(
+        buf.read(),
+        mimetype="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.route("/config", methods=["GET", "POST"])
