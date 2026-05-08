@@ -28,11 +28,29 @@ def _valid_devices(devices):
     return True
 
 
+COMMON_STYLE = """
+*, *::before, *::after { box-sizing: border-box; }
+body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 0 20px;
+       background: #fff; color: #000; }
+h1, h2 { margin-bottom: 4px; }
+a { color: #00e; }
+button { background: #000; color: #fff; border: none; padding: 6px 14px;
+         cursor: pointer; font-size: 14px; }
+button:hover { background: #333; }
+p.nav { margin-top: 32px; font-size: 14px; }
+"""
+
+
 @app.route("/")
 def index():
     return f"""<!doctype html>
-<html>
-<head><title>VitaSync</title></head>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VitaSync</title>
+  <style>{COMMON_STYLE}</style>
+</head>
 <body>
 <h2>VitaSync</h2>
 <p><b>Status:</b> <span id="status"></span></p>
@@ -40,12 +58,12 @@ def index():
 <p><b>Devices:</b> <span id="devices"></span></p>
 <p><b>Pending:</b> <span id="pending"></span></p>
 <p><b>Disk:</b> <span id="disk"></span></p>
-<a href="/">Home</a> | <a href="{url_for('config')}">Config</a> | <a href="{url_for('backups')}">Backups</a>
-| <button onclick="openSyncDlg()">Sync...</button>
+<p><button onclick="openSyncDlg()">Sync...</button></p>
 <dialog id="syncdlg">
   <div id="dlgbody"></div>
   <div id="dlgactions"></div>
 </dialog>
+<p class="nav"><a href="{url_for('config')}">Config</a> | <a href="{url_for('backups')}">Backups</a></p>
 <script>
 var _pending = [];
 function closeSyncDlg() {{ document.getElementById("syncdlg").close(); }}
@@ -110,8 +128,21 @@ def sync_now():
 @app.route("/backups")
 def backups():
     items = os.listdir(BACKUPS) if BACKUPS.exists() else []
-    rows = "<br>".join(html.escape(item) for item in sorted(items))
-    return f'<!doctype html><html><body>{rows}<p><a href="/">Home</a> | <a href="{url_for("index")}">VitaSync</a></p></body></html>'
+    rows = "".join(f"<p>{html.escape(item)}</p>" for item in sorted(items)) or "<p>No backups yet.</p>"
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VitaSync - Backups</title>
+  <style>{COMMON_STYLE}</style>
+</head>
+<body>
+<h2>Backups</h2>
+{rows}
+<p class="nav"><a href="{url_for('index')}">VitaSync</a> | <a href="{url_for('config')}">Config</a></p>
+</body>
+</html>"""
 
 
 @app.route("/config", methods=["GET", "POST"])
@@ -136,18 +167,31 @@ def config():
 
     devices_json = html.escape(json.dumps(CONFIG["devices"], indent=2))
     error_html = f'<p style="color:red">{html.escape(error)}</p>' if error else ""
-    return f"""
-    <h3>Config</h3>
-    {error_html}
-    <form method="post">
-    Mode: <select name="mode">
-        <option value="manual"{" selected" if CONFIG["mode"] == "manual" else ""}>manual</option>
-        <option value="automatic-sync"{" selected" if CONFIG["mode"] == "automatic-sync" else ""
-        }>automatic-sync</option>
-    </select><br>
-    Devices JSON:<br>
-    <textarea name="devices" rows="5" cols="40">{devices_json}</textarea><br>
-    <button type="submit">Save</button>
-    </form>
-    <p><a href="/">Home</a> | <a href="{url_for('index')}">VitaSync</a></p>
-    """
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VitaSync - Config</title>
+  <style>{COMMON_STYLE}
+    select, textarea {{ font-family: monospace; font-size: 14px; border: 1px solid #ccc; padding: 4px; }}
+    label {{ display: block; margin: 12px 0 4px; }}
+  </style>
+</head>
+<body>
+<h2>Config</h2>
+{error_html}
+<form method="post">
+  <label>Mode:
+    <select name="mode">
+      <option value="manual"{" selected" if CONFIG["mode"] == "manual" else ""}>manual</option>
+      <option value="automatic-sync"{" selected" if CONFIG["mode"] == "automatic-sync" else ""}>automatic-sync</option>
+    </select>
+  </label>
+  <label>Devices JSON:</label>
+  <textarea name="devices" rows="5" cols="40">{devices_json}</textarea>
+  <p><button type="submit">Save</button></p>
+</form>
+<p class="nav"><a href="{url_for('index')}">VitaSync</a> | <a href="{url_for('backups')}">Backups</a></p>
+</body>
+</html>"""
