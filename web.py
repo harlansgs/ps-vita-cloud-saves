@@ -1,4 +1,5 @@
 import html
+import ipaddress
 import json
 import os
 
@@ -12,6 +13,19 @@ app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 VALID_MODES = {"manual", "automatic-sync"}
+
+
+def _valid_devices(devices):
+    if not isinstance(devices, dict):
+        return False
+    for k, v in devices.items():
+        if not isinstance(k, str) or not k:
+            return False
+        try:
+            ipaddress.ip_address(v)
+        except ValueError:
+            return False
+    return True
 
 
 @app.route("/")
@@ -87,8 +101,11 @@ def config():
         try:
             devices = json.loads(request.form["devices"])
         except (json.JSONDecodeError, KeyError):
+            devices = None
             error = "Invalid JSON in devices field."
-        else:
+        if devices and not _valid_devices(devices):
+            error = 'Devices must be {"name": "ip"} pairs, e.g. {"Vita": "192.168.1.10"}.'
+        if not error:
             CONFIG["mode"] = mode
             CONFIG["devices"] = devices
             save_config()
