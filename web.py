@@ -63,7 +63,7 @@ def index():
   <div id="dlgbody"></div>
   <div id="dlgactions"></div>
 </dialog>
-<p class="nav"><a href="{url_for('config')}">Config</a> | <a href="{url_for('backups')}">Backups</a></p>
+<p class="nav"><a href="/">Home</a> | <a href="{url_for('config')}">Config</a> | <a href="{url_for('backups')}">Backups</a></p>
 <script>
 var _pending = [];
 function closeSyncDlg() {{ document.getElementById("syncdlg").close(); }}
@@ -140,7 +140,7 @@ def backups():
 <body>
 <h2>Backups</h2>
 {rows}
-<p class="nav"><a href="{url_for('index')}">VitaSync</a> | <a href="{url_for('config')}">Config</a></p>
+<p class="nav"><a href="/">Home</a> | <a href="{url_for('index')}">VitaSync</a> | <a href="{url_for('config')}">Config</a></p>
 </body>
 </html>"""
 
@@ -192,6 +192,6 @@ def config():
   <textarea name="devices" rows="5" cols="40">{devices_json}</textarea>
   <p><button type="submit">Save</button></p>
 </form>
-<p class="nav"><a href="{url_for('index')}">VitaSync</a> | <a href="{url_for('backups')}">Backups</a></p>
+<p class="nav"><a href="/">Home</a> | <a href="{url_for('index')}">VitaSync</a> | <a href="{url_for('backups')}">Backups</a></p>
 </body>
 </html>"""
